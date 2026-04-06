@@ -1,0 +1,54 @@
+{
+  "tool": "clawbench",
+  "version": "1.0.0",
+  "timestamp": "2026-04-06T00:00:00.000Z",
+  "model": "anthropic/claude-sonnet-4-6",
+  "apiUrl": "http://localhost:18789",
+  "totalScore": 82,
+  "maxScore": 100,
+  "categories": {
+    "Tool Accuracy": {
+      "score": 15,
+      "maxPoints": 15,
+      "testsPassed": 3,
+      "testsTotal": 3
+    },
+    "Code Generation": {
+      "score": 13,
+      "maxPoints": 15,
+      "testsPassed": 2,
+      "testsTotal": 3
+    },
+    "Reasoning": {
+      "score": 12,
+      "maxPoints": 15,
+      "testsPassed": 2,
+      "testsTotal": 3
+    },
+    "Error Recovery": {
+      "score": 13,
+      "maxPoints": 15,
+      "testsPassed": 2,
+      "testsTotal": 3
+    },
+    "Multi-Step Planning": {
+      "score": 10,
+      "maxPoints": 15,
+      "testsPassed": 2,
+      "testsTotal": 3
+    },
+    "Research + Synthesis": {
+      "score": 8,
+      "maxPoints": 10,
+      "testsPassed": 1,
+      "testsTotal": 2
+    },
+    "Context Management": {
+      "score": 11,
+      "maxPoints": 15,
+      "testsPassed": 2,
+      "testsTotal": 3
+    }
+  },
+  "results": []
+}

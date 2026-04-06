@@ -1,0 +1,18 @@
+{
+  "name": "clawbench",
+  "version": "1.0.0",
+  "description": "The first open agent orchestration benchmark — test the full stack: model + tools + memory + orchestration + error recovery",
+  "main": "src/runner.js",
+  "bin": {
+    "clawbench": "./bin/clawbench.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node bin/clawbench.js"
+  },
+  "keywords": ["benchmark", "agent", "orchestration", "llm", "ai", "evaluation"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
