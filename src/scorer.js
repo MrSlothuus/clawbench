@@ -1,6 +1,6 @@
 const pkg = require('../package.json');
 
-function buildScorecard(results, model, apiUrl) {
+function buildScorecard(results, model, apiUrl, modelOverride) {
   const categories = {};
 
   for (const r of results) {
@@ -21,8 +21,9 @@ function buildScorecard(results, model, apiUrl) {
     tool: 'clawbench',
     version: pkg.version,
     timestamp: new Date().toISOString(),
-    model,
-    apiUrl,
+    agent: model,
+    model: modelOverride || model,
+    gatewayUrl: apiUrl,
     totalScore,
     maxScore,
     categories,

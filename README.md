@@ -1,22 +1,6 @@
 # ClawBench
 
-The first open agent orchestration benchmark. Tests the full stack: model + tools + memory + orchestration + error recovery.
-
-## What it does
-
-ClawBench runs 20 benchmark tasks across 7 categories against any OpenAI-compatible API endpoint and produces a 0-100 scorecard. Every evaluation is programmatic, no LLM-as-judge.
-
-### Categories
-
-| Category | Points | Tests | What it measures |
-|----------|--------|-------|-----------------|
-| Tool Accuracy | 15 | 3 | File I/O, editing, directory operations |
-| Code Generation | 15 | 3 | Function generation, execution, edge cases |
-| Reasoning | 15 | 3 | Constraint satisfaction, logic, ambiguity handling |
-| Error Recovery | 15 | 3 | Syntax fixing, JSON repair, graceful failure |
-| Multi-Step Planning | 15 | 3 | Task chaining, dependency tracking, decomposition |
-| Research + Synthesis | 10 | 2 | Data extraction, cross-referencing, summarization |
-| Context Management | 15 | 3 | Fact recall, state tracking, hallucination resistance |
+The first open agent orchestration benchmark. Tests the full stack — model + OpenClaw gateway + tools + orchestration + error recovery — not just raw API calls.
 
 ## Install
 
@@ -24,65 +8,88 @@ ClawBench runs 20 benchmark tasks across 7 categories against any OpenAI-compati
 npm install -g clawbench
 ```
 
-Or run directly:
+Or run directly without installing:
 
 ```bash
 npx clawbench --help
 ```
 
-## Quick start
+## Prerequisites
+
+1. **OpenClaw installed** with the gateway running
+2. **OpenAI-compatible endpoint enabled** in your gateway config:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+3. **Gateway token** — find it in your `~/.openclaw/openclaw.json` under `gateway.auth.token`
+
+## First run
 
 ```bash
-# Set your API key
-export OPENAI_API_KEY=sk-...
+# 1. Set your gateway token (replace with your actual token)
+export OPENCLAW_GATEWAY_TOKEN="your-token-here"
 
-# Run the full suite
-npx clawbench --api-url http://localhost:18789 --model anthropic/claude-sonnet-4-6
-
-# Preview all test cases without running
+# 2. Preview all test cases (no execution)
 npx clawbench --dry-run
 
-# Run a single category
-npx clawbench --only "Tool Accuracy" --model gpt-4o
+# 3. Run with your default agent model
+npx clawbench --gateway-token "$OPENCLAW_GATEWAY_TOKEN"
 
-# CI mode with threshold
-npx clawbench --ci --threshold 80 --model anthropic/claude-sonnet-4-6
+# 4. Run with a specific model override
+npx clawbench \
+  --gateway-token "$OPENCLAW_GATEWAY_TOKEN" \
+  --model minimax-portal/MiniMax-M2.7
+
+# 5. Run with a specific agent
+npx clawbench \
+  --gateway-token "$OPENCLAW_GATEWAY_TOKEN" \
+  --agent openclaw/default \
+  --model anthropic/claude-sonnet-4-6
 ```
 
-Expected output for `--dry-run`:
+## How routing works
 
 ```
-ClawBench — Dry Run
-20 test cases across 7 categories
-
-  Tool Accuracy
-    [5pts] Write and read back a file with exact contents
-    [5pts] Edit specific lines in a file
-    [5pts] Create directory structure and search for files
-  Code Generation
-    [5pts] Generate a function: longest palindromic substring
-    ...
+clawbench → OpenClaw gateway (/v1/chat/completions)
+          → x-openclaw-model: <your model>  (if specified)
+          → OpenClaw agent (openclaw/default)
+          → Backend AI model (MiniMax, Anthropic, etc.)
+          → OpenClaw strips thinking blocks, handles retries
+          → response returned to benchmark
 ```
+
+This is the key difference vs other benchmarks: ClawBench tests what users actually experience inside OpenClaw, not a raw API response.
 
 ## CLI options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--api-url <url>` | API endpoint | `http://localhost:18789` |
-| `--model <name>` | Model identifier (required) | — |
-| `--timeout <sec>` | Per-test timeout | `60` |
-| `--only <category>` | Run single category | all |
-| `--ci` | CI mode: JSON only, exit code | off |
-| `--threshold <n>` | Min score for CI pass | `70` |
-| `--keep-sandbox` | Preserve temp dir after run | off |
-| `--sandbox-dir <path>` | Custom sandbox path | auto |
-| `--output <path>` | Write JSON scorecard to file | — |
+| `--gateway-url` | OpenClaw gateway URL | `http://localhost:18789` |
+| `--gateway-token` | Gateway bearer token (required) | — |
+| `--agent` | Agent target | `openclaw/default` |
+| `--model` | Model override (x-openclaw-model header) | agent default |
+| `--timeout` | Per-test timeout (seconds) | `90` |
+| `--only` | Run single category only | all |
+| `--ci` | CI mode: JSON output + exit code | off |
+| `--threshold` | Min score for CI pass | `70` |
+| `--keep-sandbox` | Keep temp dir after run | off |
+| `--output` | Write JSON scorecard to file | — |
 | `--dry-run` | List tests without running | off |
 | `--help` | Show help | — |
 
-API key: set `OPENAI_API_KEY` environment variable (preferred) or `--api-key` flag.
+Environment variables: `OPENCLAW_GATEWAY_TOKEN` (preferred), `CLAWBENCH_GATEWAY_URL`.
 
-## Interpreting scores
+## Score guide
 
 | Score | Rating | Meaning |
 |-------|--------|---------|
@@ -91,32 +98,36 @@ API key: set `OPENAI_API_KEY` environment variable (preferred) or `--api-key` fl
 | 40-69 | Functional | Agent works but has gaps in some areas |
 | 0-39 | Needs work | Significant agent capability issues |
 
-## Scorecard format
+## Example output
 
-Output is a JSON object:
+```
+ClawBench — Starting benchmark suite
+  Gateway:  http://localhost:18789
+  Agent:    openclaw/default
+  Model:    minimax-portal/MiniMax-M2.7
+  Tests:    20
+  Timeout:  90s per test
 
-```json
-{
-  "tool": "clawbench",
-  "version": "1.0.0",
-  "timestamp": "2026-04-06T00:00:00.000Z",
-  "model": "anthropic/claude-sonnet-4-6",
-  "apiUrl": "http://localhost:18789",
-  "totalScore": 82,
-  "maxScore": 100,
-  "categories": {
-    "Tool Accuracy": { "score": 15, "maxPoints": 15, "testsPassed": 3, "testsTotal": 3 }
-  },
-  "results": [...]
-}
+  [1/20] ✓ Write and read back a file with exact contents
+  [2/20] ✗ Edit specific lines in a file (timed out)
+  ...
+
+  Overall Score: 80/100  SOLID
+
+  Category Breakdown:
+  Tool Accuracy            10/15  ████████░░░░░░░░░░░
+  Code Generation          9/15   ███████░░░░░░░░░░░░
+  Reasoning                15/15  ████████████████████
+  ...
 ```
 
 ## Design principles
 
-1. **Read-only on the host** — all work happens in a temp directory, cleaned up after
-2. **Self-contained** — single CLI, no deps beyond Node.js 18+
-3. **Reproducible** — temperature pinned to 0, deterministic scoring
-4. **Time-boxed** — 60s per test, full suite under 10 minutes
+1. **Tests the full stack** — gateway, thinking-block stripping, retry logic, orchestration
+2. **Read-only on host** — all work in temp directories, cleaned up after
+3. **Reproducible** — temperature pinned to 0, deterministic programmatic scoring
+4. **Time-boxed** — 90s per test, full suite ~15-20 minutes
+5. **Self-contained** — Node.js 18+ only, no other dependencies
 
 ## License
 

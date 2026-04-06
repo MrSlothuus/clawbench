@@ -11,14 +11,21 @@ const c = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', 
 const USAGE = `
 ${c.bold}${c.cyan}ClawBench${c.reset} — Agent Orchestration Benchmark
 
+Tests AI models through the OpenClaw gateway — the full agent stack,
+not raw API calls. Ensures thinking-block stripping, retry logic, and
+orchestration middleware are all included in the benchmark.
+
 ${c.bold}USAGE${c.reset}
   npx clawbench [options]
 
 ${c.bold}OPTIONS${c.reset}
-  --api-url <url>       API endpoint (default: http://localhost:18789)
-  --model <name>        Model identifier (required for run)
-  --api-key <key>       API key (prefer OPENAI_API_KEY env var)
-  --timeout <seconds>   Per-test timeout in seconds (default: 60)
+  --gateway-url <url>   OpenClaw gateway URL (default: http://localhost:18789)
+  --gateway-token <tok> OpenClaw gateway bearer token
+  --model <name>        Model override via x-openclaw-model header (optional)
+                        Omit to use the agent's configured default model.
+                        Examples: minimax-portal/MiniMax-M2.7, anthropic/claude-sonnet-4-6
+  --agent <id>          Target agent (default: openclaw/default)
+  --timeout <seconds>   Per-test timeout in seconds (default: 90)
   --only <category>     Run only a specific category
   --ci                  CI mode: JSON output only, exit code based on threshold
   --threshold <score>   Minimum score for CI pass (default: 70)
@@ -29,14 +36,15 @@ ${c.bold}OPTIONS${c.reset}
   --help                Show this help message
 
 ${c.bold}ENVIRONMENT${c.reset}
-  OPENAI_API_KEY        API key (preferred over --api-key flag)
-  CLAWBENCH_API_URL     Default API URL
+  OPENCLAW_GATEWAY_TOKEN  Gateway bearer token (preferred over --gateway-token)
+  CLAWBENCH_GATEWAY_URL   Default gateway URL
 
 ${c.bold}EXAMPLES${c.reset}
   npx clawbench --dry-run
-  npx clawbench --api-url http://localhost:18789 --model anthropic/claude-sonnet-4-6
-  npx clawbench --ci --threshold 80 --model gpt-4o
-  npx clawbench --only tool-accuracy --model anthropic/claude-sonnet-4-6
+  npx clawbench --gateway-token ba8eaef230bc8e8b8729e64e973477c2700a4cb68a8dc69e
+  npx clawbench --model minimax-portal/MiniMax-M2.7 --gateway-token <token>
+  npx clawbench --model anthropic/claude-sonnet-4-6 --gateway-token <token>
+  npx clawbench --only tool-accuracy --gateway-token <token>
 
 ${c.bold}SCORE GUIDE${c.reset}
   90-100  Excellent — agent handles complex orchestration reliably
@@ -49,8 +57,12 @@ function parseCliArgs() {
   try {
     const { values } = parseArgs({
       options: {
-        'api-url': { type: 'string' },
+        'gateway-url': { type: 'string' },
+        'gateway-token': { type: 'string' },
         'model': { type: 'string' },
+        'agent': { type: 'string' },
+        // legacy aliases kept for compatibility
+        'api-url': { type: 'string' },
         'api-key': { type: 'string' },
         'timeout': { type: 'string' },
         'only': { type: 'string' },
@@ -102,17 +114,19 @@ async function main() {
   }
 
   // Validate required args for actual run
-  const apiUrl = args['api-url'] || process.env.CLAWBENCH_API_URL || 'http://localhost:18789';
-  const model = args.model;
-  const apiKey = args['api-key'] || process.env.OPENAI_API_KEY || '';
-  const timeoutMs = (parseInt(args.timeout, 10) || 60) * 1000;
+  const gatewayUrl = args['gateway-url'] || args['api-url'] || process.env.CLAWBENCH_GATEWAY_URL || 'http://localhost:18789';
+  const gatewayToken = args['gateway-token'] || args['api-key'] || process.env.OPENCLAW_GATEWAY_TOKEN || '';
+  const modelOverride = args.model || null; // optional — sent as x-openclaw-model header
+  const agentTarget = args.agent || 'openclaw/default';
+  const timeoutMs = (parseInt(args.timeout, 10) || 90) * 1000;
   const threshold = parseInt(args.threshold, 10) || 70;
   const ci = args.ci;
   const keepSandbox = args['keep-sandbox'];
 
-  if (!model) {
-    console.error(`${c.red}Error: --model is required for running benchmarks${c.reset}`);
-    console.error(`Example: npx clawbench --model anthropic/claude-sonnet-4-6`);
+  if (!gatewayToken) {
+    console.error(`${c.red}Error: --gateway-token is required (or set OPENCLAW_GATEWAY_TOKEN env var)${c.reset}`);
+    console.error(`Example: npx clawbench --gateway-token <your-openclaw-gateway-token>`);
+    console.error(`Find your token in ~/.openclaw/openclaw.json under gateway.auth.token`);
     process.exit(1);
   }
 
@@ -123,8 +137,9 @@ async function main() {
   if (!ci) {
     console.log('');
     console.log(`${c.bold}${c.cyan}ClawBench${c.reset} — Starting benchmark suite`);
-    console.log(`${c.dim}  API:     ${apiUrl}${c.reset}`);
-    console.log(`${c.dim}  Model:   ${model}${c.reset}`);
+    console.log(`${c.dim}  Gateway: ${gatewayUrl}${c.reset}`);
+    console.log(`${c.dim}  Agent:   ${agentTarget}${c.reset}`);
+    if (modelOverride) console.log(`${c.dim}  Model:   ${modelOverride}${c.reset}`);
     console.log(`${c.dim}  Sandbox: ${sandboxRoot}${c.reset}`);
     console.log(`${c.dim}  Tests:   ${testCases.length}${c.reset}`);
     console.log(`${c.dim}  Timeout: ${timeoutMs / 1000}s per test${c.reset}`);
@@ -134,9 +149,10 @@ async function main() {
   // Run
   let completed = 0;
   const scorecard = await runSuite(testCases, {
-    apiUrl,
-    model,
-    apiKey,
+    apiUrl: gatewayUrl,
+    model: agentTarget,
+    modelOverride,
+    apiKey: gatewayToken,
     timeoutMs,
     onResult: (result) => {
       completed++;
