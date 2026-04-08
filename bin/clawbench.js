@@ -33,6 +33,8 @@ ${c.bold}OPTIONS${c.reset}
   --keep-sandbox        Don't clean up temp directory after run
   --sandbox-dir <path>  Custom sandbox directory path
   --output <path>       Write JSON scorecard to file
+  --submit              Submit results to clawbench.club leaderboard
+  --submit-url <url>    Custom submission URL (default: https://clawbench.club)
   --help                Show this help message
 
 ${c.bold}ENVIRONMENT${c.reset}
@@ -45,6 +47,7 @@ ${c.bold}EXAMPLES${c.reset}
   npx clawbench --model minimax-portal/MiniMax-M2.7 --gateway-token <token>
   npx clawbench --model anthropic/claude-sonnet-4-6 --gateway-token <token>
   npx clawbench --only tool-accuracy --gateway-token <token>
+  npx clawbench --submit --gateway-token <token>
 
 ${c.bold}SCORE GUIDE${c.reset}
   90-100  Excellent — agent handles complex orchestration reliably
@@ -72,6 +75,8 @@ function parseCliArgs() {
         'keep-sandbox': { type: 'boolean', default: false },
         'sandbox-dir': { type: 'string' },
         'output': { type: 'string' },
+        'submit': { type: 'boolean', default: false },
+        'submit-url': { type: 'string' },
         'help': { type: 'boolean', default: false },
       },
       strict: true,
@@ -175,6 +180,39 @@ async function main() {
   if (args.output) {
     writeJson(scorecard, args.output);
     if (!ci) console.log(`${c.dim}Scorecard written to ${args.output}${c.reset}`);
+  }
+
+  // Submit to leaderboard if requested
+  if (args.submit) {
+    const submitBaseUrl = args['submit-url'] || 'https://clawbench.club';
+    try {
+      const payload = {
+        model: scorecard.model || modelOverride || agentTarget,
+        agent: agentTarget,
+        totalScore: scorecard.totalScore,
+        maxScore: scorecard.maxScore,
+        categories: scorecard.categories || {},
+        openclawVersion: scorecard.openclawVersion || null,
+        gatewayUrl: gatewayUrl,
+      };
+      const res = await fetch(`${submitBaseUrl}/api/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (!ci) {
+          console.log('');
+          console.log(`  ${c.green}Submitted to leaderboard!${c.reset}`);
+          console.log(`  ${c.dim}View: ${submitBaseUrl}/r/${data.short_id}${c.reset}`);
+        }
+      } else {
+        if (!ci) console.log(`  ${c.dim}Submission failed (${res.status}) -- results saved locally${c.reset}`);
+      }
+    } catch {
+      if (!ci) console.log(`  ${c.dim}Could not reach leaderboard -- results saved locally${c.reset}`);
+    }
   }
 
   // Cleanup
