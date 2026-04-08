@@ -20,7 +20,7 @@ ${c.bold}USAGE${c.reset}
 
 ${c.bold}OPTIONS${c.reset}
   --gateway-url <url>   OpenClaw gateway URL (default: http://localhost:18789)
-  --gateway-token <tok> OpenClaw gateway bearer token
+  --gateway-token <tok> OpenClaw gateway bearer token (auto-detected from ~/.openclaw/openclaw.json)
   --model <name>        Model override via x-openclaw-model header (optional)
                         Omit to use the agent's configured default model.
                         Examples: minimax-portal/MiniMax-M2.7, anthropic/claude-sonnet-4-6
@@ -43,7 +43,7 @@ ${c.bold}ENVIRONMENT${c.reset}
 
 ${c.bold}EXAMPLES${c.reset}
   npx clawbench --dry-run
-  npx clawbench --gateway-token ba8eaef230bc8e8b8729e64e973477c2700a4cb68a8dc69e
+  clawbench --gateway-token ba8eaef230bc8e8b8729e64e973477c2700a4cb68a8dc69e
   npx clawbench --model minimax-portal/MiniMax-M2.7 --gateway-token <token>
   npx clawbench --model anthropic/claude-sonnet-4-6 --gateway-token <token>
   npx clawbench --only tool-accuracy --gateway-token <token>
@@ -120,7 +120,21 @@ async function main() {
 
   // Validate required args for actual run
   const gatewayUrl = args['gateway-url'] || args['api-url'] || process.env.CLAWBENCH_GATEWAY_URL || 'http://localhost:18789';
-  const gatewayToken = args['gateway-token'] || args['api-key'] || process.env.OPENCLAW_GATEWAY_TOKEN || '';
+
+  // Auto-detect token: flag → env var → ~/.openclaw/openclaw.json
+  let gatewayToken = args['gateway-token'] || args['api-key'] || process.env.OPENCLAW_GATEWAY_TOKEN || '';
+  if (!gatewayToken) {
+    try {
+      const os = require('os');
+      const path = require('path');
+      const fs = require('fs');
+      const openclawCfg = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+      if (fs.existsSync(openclawCfg)) {
+        const cfg = JSON.parse(fs.readFileSync(openclawCfg, 'utf8'));
+        gatewayToken = cfg?.gateway?.auth?.token || '';
+      }
+    } catch (_) {}
+  }
   const modelOverride = args.model || null; // optional — sent as x-openclaw-model header
   const agentTarget = args.agent || 'openclaw/default';
   const timeoutMs = (parseInt(args.timeout, 10) || 90) * 1000;
@@ -128,10 +142,11 @@ async function main() {
   const ci = args.ci;
   const keepSandbox = args['keep-sandbox'];
 
-  if (!gatewayToken) {
-    console.error(`${c.red}Error: --gateway-token is required (or set OPENCLAW_GATEWAY_TOKEN env var)${c.reset}`);
-    console.error(`Example: npx clawbench --gateway-token <your-openclaw-gateway-token>`);
-    console.error(`Find your token in ~/.openclaw/openclaw.json under gateway.auth.token`);
+  // Token required only for actual benchmark runs (not --submit which only talks to leaderboard API)
+  if (!gatewayToken && !args.submit) {
+    console.error(`${c.red}Error: --gateway-token is required${c.reset}`);
+    console.error(`Auto-detected from ~/.openclaw/openclaw.json — or set OPENCLAW_GATEWAY_TOKEN env var`);
+    console.error(`Example: clawbench --gateway-token <your-openclaw-gateway-token>`);
     process.exit(1);
   }
 
