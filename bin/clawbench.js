@@ -25,6 +25,7 @@ ${c.bold}OPTIONS${c.reset}
                         Omit to use the agent's configured default model.
                         Examples: minimax-portal/MiniMax-M2.7, anthropic/claude-sonnet-4-6
   --agent <id>          Target agent (default: openclaw/default)
+  --agent-name <name>   Override agent display name (auto-detected from OpenClaw config)
   --timeout <seconds>   Per-test timeout in seconds (default: 90)
   --only <category>     Run only a specific category
   --ci                  CI mode: JSON output only, exit code based on threshold
@@ -56,6 +57,64 @@ ${c.bold}SCORE GUIDE${c.reset}
   0-39    Needs work — significant agent capability issues
 `;
 
+/**
+ * Detect the agent's display name from OpenClaw configuration.
+ * 1. Parse ~/.openclaw/openclaw.json → agents.list → find by id → use `name`
+ * 2. Try IDENTITY.md in the agent dir for a Name field
+ * 3. Fall back to null (caller can use agentTarget string)
+ */
+function detectAgentName(agentTarget) {
+  const os = require('os');
+  const path = require('path');
+  const fs = require('fs');
+
+  // Extract the agent id from target like "openclaw/default" or "openclaw/neo"
+  const agentId = agentTarget.includes('/') ? agentTarget.split('/').pop() : agentTarget;
+
+  try {
+    const openclawCfg = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+    if (!fs.existsSync(openclawCfg)) return null;
+
+    const cfg = JSON.parse(fs.readFileSync(openclawCfg, 'utf8'));
+    const agentsList = cfg?.agents?.list || [];
+
+    // For "default", find the first agent in the list (typically "main")
+    let agentEntry;
+    if (agentId === 'default') {
+      agentEntry = agentsList.find(a => a.id === 'main') || agentsList[0];
+    } else {
+      agentEntry = agentsList.find(a => a.id === agentId);
+    }
+
+    if (agentEntry?.name) return agentEntry.name;
+
+    // Try IDENTITY.md in the agent dir
+    const agentDir = agentEntry?.agentDir || path.join(os.homedir(), '.openclaw', 'agents', agentEntry?.id || agentId, 'agent');
+    const identityPath = path.join(agentDir, 'IDENTITY.md');
+    if (fs.existsSync(identityPath)) {
+      const content = fs.readFileSync(identityPath, 'utf8');
+      const nameMatch = content.match(/^-\s*\*\*Name:\*\*\s*(.+)$/m) ||
+                        content.match(/^#\s+(.+)/m);
+      if (nameMatch) return nameMatch[1].trim();
+    }
+
+    // Try workspace IDENTITY.md
+    if (agentEntry?.workspace) {
+      const wsIdentity = path.join(agentEntry.workspace, 'IDENTITY.md');
+      if (fs.existsSync(wsIdentity)) {
+        const content = fs.readFileSync(wsIdentity, 'utf8');
+        const nameMatch = content.match(/^-\s*\*\*Name:\*\*\s*(.+)$/m) ||
+                          content.match(/^#\s+.+[\s\S]*?-\s*\*\*Name:\*\*\s*(.+)$/m);
+        if (nameMatch) return (nameMatch[1] || nameMatch[0]).trim();
+      }
+    }
+  } catch (_) {
+    // Detection is best-effort
+  }
+
+  return null;
+}
+
 function parseCliArgs() {
   try {
     const { values } = parseArgs({
@@ -64,6 +123,7 @@ function parseCliArgs() {
         'gateway-token': { type: 'string' },
         'model': { type: 'string' },
         'agent': { type: 'string' },
+        'agent-name': { type: 'string' },
         // legacy aliases kept for compatibility
         'api-url': { type: 'string' },
         'api-key': { type: 'string' },
@@ -137,6 +197,7 @@ async function main() {
   }
   const modelOverride = args.model || null; // optional — sent as x-openclaw-model header
   const agentTarget = args.agent || 'openclaw/default';
+  const agentName = args['agent-name'] || detectAgentName(agentTarget);
   const timeoutMs = (parseInt(args.timeout, 10) || 90) * 1000;
   const threshold = parseInt(args.threshold, 10) || 70;
   const ci = args.ci;
@@ -160,6 +221,7 @@ async function main() {
     console.log(`${c.dim}  Gateway: ${gatewayUrl}${c.reset}`);
     console.log(`${c.dim}  Agent:   ${agentTarget}${c.reset}`);
     if (modelOverride) console.log(`${c.dim}  Model:   ${modelOverride}${c.reset}`);
+    if (agentName) console.log(`${c.dim}  Name:    ${agentName}${c.reset}`);
     console.log(`${c.dim}  Sandbox: ${sandboxRoot}${c.reset}`);
     console.log(`${c.dim}  Tests:   ${testCases.length}${c.reset}`);
     console.log(`${c.dim}  Timeout: ${timeoutMs / 1000}s per test${c.reset}`);
@@ -204,6 +266,7 @@ async function main() {
       const payload = {
         model: scorecard.model || modelOverride || agentTarget,
         agent: agentTarget,
+        agentName: agentName || null,
         totalScore: scorecard.totalScore,
         maxScore: scorecard.maxScore,
         categories: scorecard.categories || {},
