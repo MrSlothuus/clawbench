@@ -33,14 +33,15 @@ function scoreBadge(totalScore, maxScore) {
 }
 
 function printTerminal(scorecard) {
-  const { totalScore, maxScore, categories, results, model, timestamp } = scorecard;
+  const { totalScore, maxScore, categories, results, model, timestamp, discoveredModel } = scorecard;
 
   console.log('');
   console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════════════════╗${c.reset}`);
   console.log(`${c.bold}${c.cyan}║          🔬 ClawBench Scorecard                  ║${c.reset}`);
   console.log(`${c.bold}${c.cyan}╚══════════════════════════════════════════════════╝${c.reset}`);
   console.log('');
-  console.log(`  ${c.dim}Model:${c.reset}     ${model}`);
+  const displayModel = discoveredModel || model;
+  console.log(`  ${c.dim}Model:${c.reset}     ${displayModel}${discoveredModel ? ` ${c.dim}(discovered)${c.reset}` : ''}`);
   console.log(`  ${c.dim}Timestamp:${c.reset} ${timestamp}`);
   console.log('');
 

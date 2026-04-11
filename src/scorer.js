@@ -1,6 +1,6 @@
 const pkg = require('../package.json');
 
-function buildScorecard(results, model, apiUrl, modelOverride) {
+function buildScorecard(results, model, apiUrl, modelOverride, discoveredModel) {
   const categories = {};
 
   for (const r of results) {
@@ -22,12 +22,13 @@ function buildScorecard(results, model, apiUrl, modelOverride) {
     version: pkg.version,
     timestamp: new Date().toISOString(),
     agent: model,
-    model: modelOverride || model,
+    model: modelOverride || discoveredModel || model,
     gatewayUrl: apiUrl,
     totalScore,
     maxScore,
     categories,
     results,
+    discoveredModel,
   };
 }
 

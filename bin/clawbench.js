@@ -36,6 +36,7 @@ ${c.bold}OPTIONS${c.reset}
   --output <path>       Write JSON scorecard to file
   --submit              Submit results to clawbench.club leaderboard
   --submit-url <url>    Custom submission URL (default: https://clawbench.club)
+  --update              Pull latest changes and reinstall (self-update)
   --help                Show this help message
 
 ${c.bold}ENVIRONMENT${c.reset}
@@ -98,7 +99,7 @@ function detectAgentName(agentTarget) {
       if (nameMatch) return nameMatch[1].trim();
     }
 
-    // Try workspace IDENTITY.md
+    // Try workspace IDENTITY.md (e.g. ~/clawd/IDENTITY.md)
     if (agentEntry?.workspace) {
       const wsIdentity = path.join(agentEntry.workspace, 'IDENTITY.md');
       if (fs.existsSync(wsIdentity)) {
@@ -106,10 +107,24 @@ function detectAgentName(agentTarget) {
         const nameMatch = content.match(/^-\s*\*\*Name:\*\*\s*(.+)$/m) ||
                           content.match(/^#\s+.+[\s\S]*?-\s*\*\*Name:\*\*\s*(.+)$/m);
         if (nameMatch) return (nameMatch[1] || nameMatch[0]).trim();
+        // Also try simple "Name:" pattern without asterisks
+        const simpleMatch = content.match(/^Name:\s*(.+)$/m);
+        if (simpleMatch) return simpleMatch[1].trim();
       }
     }
   } catch (_) {
     // Detection is best-effort
+  }
+
+  // Special case: "default" agent maps to Morpheus (workspace ~/clawd)
+  // The main agent's workspace is ~/clawd which has IDENTITY.md with Name: Morpheus
+  if (agentId === 'default' || agentId === 'main') {
+    const morpheusIdentity = path.join(os.homedir(), 'clawd', 'IDENTITY.md');
+    if (fs.existsSync(morpheusIdentity)) {
+      const content = fs.readFileSync(morpheusIdentity, 'utf8');
+      const nameMatch = content.match(/^-\s*\*\*Name:\*\*\s*(.+)$/m);
+      if (nameMatch) return nameMatch[1].trim();
+    }
   }
 
   return null;
@@ -137,6 +152,7 @@ function parseCliArgs() {
         'output': { type: 'string' },
         'submit': { type: 'boolean', default: false },
         'submit-url': { type: 'string' },
+        'update': { type: 'boolean', default: false },
         'help': { type: 'boolean', default: false },
       },
       strict: true,
@@ -152,8 +168,63 @@ function parseCliArgs() {
 async function main() {
   const args = parseCliArgs();
 
+  // Show help and exit
   if (args.help) {
     console.log(USAGE);
+    process.exit(0);
+  }
+
+  // Self-update: git pull + npm install + npm link
+  if (args.update) {
+    const { execSync } = require('child_process');
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+
+    // Resolve the actual repo path: find where this binary lives, go up 2 levels to package root
+    // Handles both global npm link (/opt/homebrew/lib/node_modules/clawbench → project) and local runs
+    let repoDir;
+    try {
+      const pkgPath = require.resolve('clawbench/package.json');
+      repoDir = path.dirname(path.dirname(pkgPath));
+    } catch (_) {
+      // Fallback: resolve from the binary's location
+      const binPath = __filename; // this file is at <repo>/bin/clawbench.js
+      repoDir = path.dirname(path.dirname(binPath));
+    }
+    console.log(`${c.bold}${c.cyan}ClawBench — Self-Update${c.reset}`);
+    console.log(`${c.dim}  Repo: ${repoDir}${c.reset}\n`);
+
+    try {
+      console.log(`${c.dim}Fetching...${c.reset}`);
+      execSync('git fetch origin', { cwd: repoDir, stdio: 'pipe' });
+
+      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+      const localCommit = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+      const remoteCommit = execSync(`git rev-parse origin/${currentBranch}`, { cwd: repoDir, encoding: 'utf8' }).trim();
+
+      if (localCommit === remoteCommit) {
+        console.log(`  ${c.green}Already up to date (${currentBranch}, ${localCommit.slice(0, 7)})${c.reset}`);
+        process.exit(0);
+      }
+
+      console.log(`${c.dim}Pulling...${c.reset}`);
+      execSync(`git pull origin ${currentBranch}`, { cwd: repoDir, stdio: 'pipe' });
+
+      console.log(`${c.dim}Installing...${c.reset}`);
+      execSync('npm install', { cwd: repoDir, stdio: 'pipe' });
+
+      console.log(`${c.dim}Relinking...${c.reset}`);
+      execSync('npm link', { cwd: repoDir, stdio: 'pipe' });
+
+      const newVersion = JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8')).version;
+      const newCommit = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+
+      console.log(`\n  ${c.green}${c.bold}Updated to ${newVersion} (${newCommit.slice(0, 7)})${c.reset}`);
+    } catch (err) {
+      console.error(`${c.red}Update failed: ${err.message}${c.reset}`);
+      process.exit(1);
+    }
     process.exit(0);
   }
 
@@ -262,34 +333,69 @@ async function main() {
   // Submit to leaderboard if requested
   if (args.submit) {
     const submitBaseUrl = args['submit-url'] || 'https://clawbench.club';
+    const { createHmac } = require('crypto');
+
+    // Build scorecard payload (what gets signed)
+    const scorecardPayload = {
+      model: scorecard.model || modelOverride || agentTarget,
+      agent: agentTarget,
+      agentName: agentName || null,
+      totalScore: scorecard.totalScore,
+      maxScore: scorecard.maxScore,
+      categories: scorecard.categories || {},
+      gatewayUrl: gatewayUrl,
+    };
+
     try {
-      const payload = {
-        model: scorecard.model || modelOverride || agentTarget,
-        agent: agentTarget,
-        agentName: agentName || null,
-        totalScore: scorecard.totalScore,
-        maxScore: scorecard.maxScore,
-        categories: scorecard.categories || {},
-        openclawVersion: scorecard.openclawVersion || null,
-        gatewayUrl: gatewayUrl,
-      };
+      // Step 1: Get a challenge nonce from the server
+      const challengeRes = await fetch(`${submitBaseUrl}/api/submit`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      let verified = false;
+      let payload = { ...scorecardPayload, openclawVersion: scorecard.openclawVersion || null };
+
+      if (challengeRes.ok) {
+        const { nonce, expiresAt } = await challengeRes.json();
+        // Step 2: Sign scorecard + nonce with gateway token
+        const sigData = JSON.stringify(scorecardPayload) + nonce;
+        const signature = createHmac('sha256', gatewayToken).update(sigData).digest('hex');
+        // Step 3: Submit with signature + nonce (server discards gatewayToken after verification)
+        payload = { ...payload, gatewayToken, signature, nonce };
+        verified = true;
+        if (!ci) console.log(`  ${c.dim}Verifying via gateway token...${c.reset}`);
+      } else if (!gatewayToken) {
+        if (!ci) console.log(`  ${c.dim}No gateway token — submitting as unverified${c.reset}`);
+      } else {
+        if (!ci) console.log(`  ${c.dim}Challenge endpoint unavailable — submitting as unverified${c.reset}`);
+      }
+
+      // Step 4: Submit
       const res = await fetch(`${submitBaseUrl}/api/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
       if (res.ok) {
         const data = await res.json();
         if (!ci) {
           console.log('');
           console.log(`  ${c.green}Submitted to leaderboard!${c.reset}`);
+          if (data.verified) {
+            console.log(`  ${c.green}${c.bold}✓ Verified${c.reset} — token verified, score is authentic`);
+          } else {
+            console.log(`  ${c.yellow}⚠ Unverified${c.reset} — provide a gateway token to get a verified badge`);
+          }
           console.log(`  ${c.dim}View: ${submitBaseUrl}/r/${data.short_id}${c.reset}`);
         }
       } else {
-        if (!ci) console.log(`  ${c.dim}Submission failed (${res.status}) -- results saved locally${c.reset}`);
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        if (!ci) console.log(`  ${c.red}Submission failed: ${err.error || res.status}${c.reset}`);
       }
-    } catch {
-      if (!ci) console.log(`  ${c.dim}Could not reach leaderboard -- results saved locally${c.reset}`);
+    } catch (err) {
+      if (!ci) console.log(`  ${c.dim}Could not reach leaderboard — results saved locally${c.reset}`);
     }
   }
 
