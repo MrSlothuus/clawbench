@@ -357,14 +357,40 @@ async function main() {
       let payload = { ...scorecardPayload, openclawVersion: scorecard.openclawVersion || null };
 
       if (challengeRes.ok) {
-        const { nonce, expiresAt } = await challengeRes.json();
-        // Step 2: Sign scorecard + nonce with gateway token
-        const sigData = JSON.stringify(scorecardPayload) + nonce;
-        const signature = createHmac('sha256', gatewayToken).update(sigData).digest('hex');
-        // Step 3: Submit with signature + nonce (server discards gatewayToken after verification)
-        payload = { ...payload, gatewayToken, signature, nonce };
-        verified = true;
-        if (!ci) console.log(`  ${c.dim}Verifying via gateway token...${c.reset}`);
+        const { nonce } = await challengeRes.json();
+
+        // Step 2: Verify gateway token locally (Option B — server does not call localhost)
+        // This works for local gateways that the remote server cannot reach.
+        if (gatewayToken) {
+          const gwUrl = gatewayUrl.replace(/\/+$/, '');
+          let localVerifyOK = false;
+          try {
+            if (!ci) console.log(`  ${c.dim}Verifying gateway token locally...${c.reset}`);
+            const gwRes = await fetch(`${gwUrl}/v1/models`, {
+              headers: { Authorization: `Bearer ${gatewayToken}` },
+              signal: AbortSignal.timeout(8000),
+            });
+            localVerifyOK = gwRes.ok;
+          } catch (_) {
+            localVerifyOK = false;
+          }
+
+          if (!localVerifyOK) {
+            if (!ci) console.log(`  ${c.red}Gateway token verification failed locally — cannot reach gateway or token is invalid${c.reset}`);
+            // Fall through as unverified rather than blocking the whole submit
+          } else {
+            // Step 3: Sign scorecard + nonce with gateway token (proves possession)
+            const sigData = JSON.stringify(scorecardPayload) + nonce;
+            const signature = createHmac('sha256', gatewayToken).update(sigData).digest('hex');
+            // Step 4: Submit with signature + nonce + gatewayVerified flag
+            // Server verifies HMAC; gatewayToken is used once and discarded, never stored.
+            payload = { ...payload, gatewayToken, signature, nonce, gatewayVerified: true };
+            verified = true;
+            if (!ci) console.log(`  ${c.dim}Gateway token verified locally — submitting with attestation${c.reset}`);
+          }
+        } else {
+          if (!ci) console.log(`  ${c.dim}No gateway token — submitting as unverified${c.reset}`);
+        }
       } else if (!gatewayToken) {
         if (!ci) console.log(`  ${c.dim}No gateway token — submitting as unverified${c.reset}`);
       } else {
